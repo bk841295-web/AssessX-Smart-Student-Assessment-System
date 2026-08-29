@@ -18,7 +18,7 @@ def init_db():
     c = db()
 
     c.executescript("""
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         email TEXT UNIQUE,
@@ -26,12 +26,12 @@ def init_db():
         role TEXT DEFAULT 'student'
     );
 
-    CREATE TABLE IF NOT EXISTS subjects (
+    CREATE TABLE IF NOT EXISTS subjects(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE
     );
 
-    CREATE TABLE IF NOT EXISTS questions (
+    CREATE TABLE IF NOT EXISTS questions(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         subject_id INTEGER,
         question TEXT,
@@ -42,7 +42,7 @@ def init_db():
         answer TEXT
     );
 
-    CREATE TABLE IF NOT EXISTS results (
+    CREATE TABLE IF NOT EXISTS results(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         subject_id INTEGER,
@@ -64,7 +64,7 @@ def init_db():
         )
     )
 
-    # Subjects
+    # Default subjects
     subjects_list = [
         "Java",
         "DBMS",
@@ -82,60 +82,57 @@ def init_db():
     # Sample questions
     for s in subjects_list:
 
-        sid = c.execute(
+        row = c.execute(
             "SELECT id FROM subjects WHERE name=?",
             (s,)
-        ).fetchone()["id"]
-
-        existing = c.execute(
-            "SELECT 1 FROM questions WHERE subject_id=?",
-            (sid,)
         ).fetchone()
 
-        if not existing:
+        if row:
+            sid = row["id"]
 
-            c.execute(
-                """
-                INSERT INTO questions
-                (subject_id,question,a,b,c,d,answer)
-                VALUES(?,?,?,?,?,?,?)
-                """,
-                (
-                    sid,
-                    f"Which option is a basic concept related to {s}?",
-                    "A programming/CS concept",
-                    "A fruit",
-                    "A vehicle",
-                    "A city",
-                    "A"
-                )
-            )
+            existing = c.execute(
+                "SELECT 1 FROM questions WHERE subject_id=?",
+                (sid,)
+            ).fetchone()
 
-            c.execute(
-                """
-                INSERT INTO questions
-                (subject_id,question,a,b,c,d,answer)
-                VALUES(?,?,?,?,?,?,?)
-                """,
-                (
-                    sid,
-                    f"Which option is commonly studied in {s}?",
-                    "Algorithms and concepts",
-                    "Cooking",
-                    "Geography",
-                    "Music",
-                    "A"
+            if not existing:
+
+                c.execute(
+                    """
+                    INSERT INTO questions
+                    (subject_id,question,a,b,c,d,answer)
+                    VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        sid,
+                        f"Which option is a basic concept related to {s}?",
+                        "A programming/CS concept",
+                        "A fruit",
+                        "A vehicle",
+                        "A city",
+                        "A"
+                    )
                 )
-            )
+
+                c.execute(
+                    """
+                    INSERT INTO questions
+                    (subject_id,question,a,b,c,d,answer)
+                    VALUES(?,?,?,?,?,?,?)
+                    """,
+                    (
+                        sid,
+                        f"Which option is commonly studied in {s}?",
+                        "Algorithms and concepts",
+                        "Cooking",
+                        "Geography",
+                        "Music",
+                        "A"
+                    )
+                )
 
     c.commit()
     c.close()
-
-
-# IMPORTANT:
-# Render/Gunicorn me database automatically create karne ke liye
-# init_db() yahan call karna zaroori hai.
-init_db()
 
 
 @app.route("/")
@@ -148,29 +145,40 @@ def register():
 
     if request.method == "POST":
 
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+
+        if not name or not email or not password:
+            flash("Please fill all fields.")
+            return render_template("register.html")
+
         try:
 
             c = db()
 
             c.execute(
-                "INSERT INTO users(name,email,password) VALUES(?,?,?)",
-                (
-                    request.form["name"],
-                    request.form["email"],
-                    request.form["password"]
-                )
+                """
+                INSERT INTO users(name,email,password)
+                VALUES(?,?,?)
+                """,
+                (name, email, password)
             )
 
             c.commit()
             c.close()
 
-            flash("Registration successful!")
-
+            flash("Registration successful.")
             return redirect(url_for("login"))
 
         except sqlite3.IntegrityError:
 
             flash("Email already registered.")
+
+        except Exception as e:
+
+            print("REGISTER ERROR:", e)
+            flash("Registration failed. Please try again.")
 
     return render_template("register.html")
 
@@ -180,6 +188,9 @@ def login():
 
     if request.method == "POST":
 
+        email = request.form.get("email", "").strip()
+        password = request.form.get("password", "")
+
         c = db()
 
         u = c.execute(
@@ -187,21 +198,16 @@ def login():
             SELECT * FROM users
             WHERE email=? AND password=?
             """,
-            (
-                request.form["email"],
-                request.form["password"]
-            )
+            (email, password)
         ).fetchone()
 
         c.close()
 
         if u:
 
-            session.update(
-                user_id=u["id"],
-                name=u["name"],
-                role=u["role"]
-            )
+            session["user_id"] = u["id"]
+            session["name"] = u["name"]
+            session["role"] = u["role"]
 
             return redirect(url_for("dashboard"))
 
@@ -215,14 +221,14 @@ def logout():
 
     session.clear()
 
-    return redirect("/")
+    return redirect(url_for("index"))
 
 
 @app.route("/dashboard")
 def dashboard():
 
     if "user_id" not in session:
-        return redirect("/login")
+        return redirect(url_for("login"))
 
     c = db()
 
@@ -232,7 +238,9 @@ def dashboard():
 
     results = c.execute(
         """
-        SELECT r.*, s.name subject
+        SELECT
+            r.*,
+            s.name AS subject
         FROM results r
         JOIN subjects s ON s.id = r.subject_id
         WHERE r.user_id=?
@@ -254,7 +262,7 @@ def dashboard():
 def test(sid):
 
     if "user_id" not in session:
-        return redirect("/login")
+        return redirect(url_for("login"))
 
     c = db()
 
@@ -263,24 +271,40 @@ def test(sid):
         (sid,)
     ).fetchone()
 
+    if not subject:
+        c.close()
+        flash("Subject not found.")
+        return redirect(url_for("dashboard"))
+
     qs = c.execute(
-        "SELECT * FROM questions WHERE subject_id=?",
+        """
+        SELECT * FROM questions
+        WHERE subject_id=?
+        """,
         (sid,)
     ).fetchall()
 
     if request.method == "POST":
 
-        score = sum(
-            request.form.get(str(q["id"])) == q["answer"]
-            for q in qs
-        )
+        score = 0
+
+        for q in qs:
+
+            selected = request.form.get(str(q["id"]))
+
+            if selected == q["answer"]:
+                score += 1
 
         total = len(qs)
 
-        pct = round(
-            score * 100 / total,
-            2
-        ) if total else 0
+        if total > 0:
+            pct = round((score * 100) / total, 2)
+        else:
+            pct = 0
+
+        taken_at = datetime.now().strftime(
+            "%Y-%m-%d %H:%M"
+        )
 
         c.execute(
             """
@@ -294,7 +318,7 @@ def test(sid):
                 score,
                 total,
                 pct,
-                datetime.now().strftime("%Y-%m-%d %H:%M")
+                taken_at
             )
         )
 
@@ -322,7 +346,7 @@ def test(sid):
 def admin():
 
     if session.get("role") != "admin":
-        return redirect("/dashboard")
+        return redirect(url_for("dashboard"))
 
     c = db()
 
@@ -342,11 +366,11 @@ def admin():
         """
         SELECT
             r.*,
-            u.name student,
-            s.name subject
+            u.name AS student,
+            s.name AS subject
         FROM results r
-        JOIN users u ON u.id=r.user_id
-        JOIN subjects s ON s.id=r.subject_id
+        JOIN users u ON u.id = r.user_id
+        JOIN subjects s ON s.id = r.subject_id
         ORDER BY r.id DESC
         """
     ).fetchall()
@@ -365,24 +389,29 @@ def admin():
 def add_subject():
 
     if session.get("role") != "admin":
-        return redirect("/dashboard")
+        return redirect(url_for("dashboard"))
 
-    c = db()
+    name = request.form.get("name", "").strip()
 
-    c.execute(
-        "INSERT OR IGNORE INTO subjects(name) VALUES(?)",
-        (request.form["name"],)
-    )
+    if name:
 
-    c.commit()
-    c.close()
+        c = db()
 
-    return redirect("/admin")
+        c.execute(
+            "INSERT OR IGNORE INTO subjects(name) VALUES(?)",
+            (name,)
+        )
+
+        c.commit()
+        c.close()
+
+    return redirect(url_for("admin"))
+
+
+# IMPORTANT:
+# Render/Gunicorn par bhi database tables create hon.
+init_db()
 
 
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=True
-    )
+    app.run(debug=True)
